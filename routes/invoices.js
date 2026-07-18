@@ -6,10 +6,25 @@ const Invoice = require("../models/Invoice");
 const { authMiddleware } = require("../utils/authMiddleware");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { generateInvoicePdf } = require("../utils/pdfGenerator");
+const { isNonEmptyString, ValidationErrors } = require("../utils/validators");
 
 const router = express.Router();
 
 const VALID_STATUSES = ["Submitted", "Approved", "Accounts", "Paid", "Rejected"];
+
+// Checks every numeric/amount field the doctor typed in and rejects negative values
+// outright (instead of silently skipping them), so a typo like "-500" surfaces as a
+// clear error rather than quietly vanishing from the invoice total.
+function findNegativeFields(hospital, formValues) {
+  const negative = [];
+  for (const field of hospital.requiredFields) {
+    const raw = formValues[field.key];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const num = Number(raw);
+    if (Number.isFinite(num) && num < 0) negative.push(field.label);
+  }
+  return negative;
+}
 
 function buildLineItems(hospital, formValues) {
   const lineItems = [];
@@ -34,8 +49,14 @@ function buildLineItems(hospital, formValues) {
 // POST /api/invoices - create a new invoice
 router.post("/", authMiddleware, asyncHandler(async (req, res) => {
   const { hospitalId, month, formValues, description } = req.body;
-  if (!hospitalId || !month || !formValues) {
-    return res.status(400).json({ error: "hospitalId, month and formValues are required" });
+
+  const errors = new ValidationErrors();
+  if (!isNonEmptyString(hospitalId)) errors.add("hospitalId", "Hospital is required");
+  // "month" is the billing/invoice date for this invoice - required either way.
+  if (!isNonEmptyString(month)) errors.add("month", "Invoice date is required");
+  if (!formValues || typeof formValues !== "object") errors.add("formValues", "formValues are required");
+  if (errors.hasErrors) {
+    return res.status(400).json(errors.toJSON());
   }
   // description is optional - a free-text note that appears on the PDF if provided
 
@@ -45,6 +66,11 @@ router.post("/", authMiddleware, asyncHandler(async (req, res) => {
   ]);
   if (!doctor) return res.status(404).json({ error: "Doctor not found" });
   if (!hospital) return res.status(404).json({ error: "Hospital not found" });
+
+  const negativeFields = findNegativeFields(hospital, formValues);
+  if (negativeFields.length) {
+    return res.status(400).json({ error: `${negativeFields.join(", ")} cannot be negative` });
+  }
 
   // Validation warnings mirroring the "AI Invoice Validator" concept from the spec
   const warnings = [];

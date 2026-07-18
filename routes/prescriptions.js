@@ -5,6 +5,7 @@ const Prescription = require("../models/Prescription");
 const { authMiddleware } = require("../utils/authMiddleware");
 const { asyncHandler } = require("../utils/asyncHandler");
 const { generatePrescriptionPdf } = require("../utils/prescriptionPdfGenerator");
+const { isNonEmptyString, isPositiveNumber, isNonNegativeNumber, ValidationErrors } = require("../utils/validators");
 
 const router = express.Router();
 
@@ -23,23 +24,46 @@ router.post("/", authMiddleware, asyncHandler(async (req, res) => {
     consultationFee
   } = req.body;
 
-  if (!patientName || !patientName.trim()) {
-    return res.status(400).json({ error: "Patient name is required" });
+  const errors = new ValidationErrors();
+
+  if (!isNonEmptyString(patientName)) {
+    errors.add("patientName", "Patient name is required");
+  }
+  // Age is free-text on the model, but if the doctor filled it in it must be a positive number.
+  if (isNonEmptyString(patientAge) && !isPositiveNumber(patientAge)) {
+    errors.add("patientAge", "Age must be a positive number");
+  }
+  if (!isNonEmptyString(patientGender)) {
+    errors.add("patientGender", "Gender is required");
   }
   if (!Array.isArray(medicines) || medicines.length === 0) {
-    return res.status(400).json({ error: "Add at least one medicine" });
+    errors.add("medicines", "Add at least one medicine");
   }
-  const cleanMedicines = medicines
-    .map((m) => ({
-      name: (m.name || "").trim(),
-      dosage: (m.dosage || "").trim(),
-      frequency: (m.frequency || "").trim(),
-      duration: (m.duration || "").trim(),
-      instructions: (m.instructions || "").trim()
-    }))
-    .filter((m) => m.name);
-  if (cleanMedicines.length === 0) {
-    return res.status(400).json({ error: "Each medicine needs at least a name" });
+  if (consultationFee !== undefined && consultationFee !== "" && !isNonNegativeNumber(consultationFee)) {
+    errors.add("consultationFee", "Consultation fee cannot be negative");
+  }
+
+  if (errors.hasErrors) {
+    return res.status(400).json(errors.toJSON());
+  }
+
+  const cleanMedicines = medicines.map((m, idx) => {
+    const name = (m.name || "").trim();
+    const dosage = (m.dosage || "").trim();
+    const frequency = (m.frequency || "").trim();
+    const duration = (m.duration || "").trim();
+    const instructions = (m.instructions || "").trim();
+
+    if (!name) errors.add(`medicines.${idx}.name`, `Medicine ${idx + 1}: name is required`);
+    if (!dosage) errors.add(`medicines.${idx}.dosage`, `Medicine ${idx + 1}: dosage is required`);
+    if (!frequency) errors.add(`medicines.${idx}.frequency`, `Medicine ${idx + 1}: frequency is required`);
+    if (!duration) errors.add(`medicines.${idx}.duration`, `Medicine ${idx + 1}: duration is required`);
+
+    return { name, dosage, frequency, duration, instructions };
+  });
+
+  if (errors.hasErrors) {
+    return res.status(400).json(errors.toJSON());
   }
 
   const doctor = await Doctor.findById(req.doctorId);
