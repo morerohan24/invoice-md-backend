@@ -17,6 +17,27 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
+let initialized = false;
+
+async function initialize() {
+  if (initialized) return;
+
+  await connectDB();
+  await seedHospitals();
+
+  initialized = true;
+}
+
+// Initialize database before handling the first request
+app.use(async (req, res, next) => {
+  try {
+    await initialize();
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // API Routes
 app.use("/api/doctors", doctorRoutes);
 app.use("/api/hospitals", hospitalRoutes);
@@ -31,8 +52,8 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Serve frontend (only for local development)
-if (process.env.VERCEL !== "1") {
+// Serve frontend only in local development
+if (!process.env.VERCEL) {
   const frontendPath = path.join(__dirname, "..", "frontend");
 
   app.use(express.static(frontendPath));
@@ -68,29 +89,24 @@ app.use((err, req, res, next) => {
   }
 
   res.status(500).json({
-    error: "Internal Server Error",
+    error: err.message || "Internal Server Error",
   });
 });
 
-let initialized = false;
-
-async function initialize() {
-  if (initialized) return;
-
-  await connectDB();
-  await seedHospitals();
-
-  initialized = true;
-}
-
-initialize();
-
+// Run locally only
 if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 5000;
 
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-  });
+  initialize()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`🚀 Server running on http://localhost:${PORT}`);
+      });
+    })
+    .catch((err) => {
+      console.error("Startup Error:", err);
+      process.exit(1);
+    });
 }
 
 module.exports = app;
